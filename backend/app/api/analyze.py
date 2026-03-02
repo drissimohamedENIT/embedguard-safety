@@ -1,17 +1,12 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from sqlalchemy.orm import Session, joinedload
 import os
 import shutil
 from uuid import uuid4
-from app.services.analyzer import run_cppcheck
-from app.parsers.cppcheck_parser import parse_cppcheck_output
-from app.services.classifier import classify_issue
-from app.scoring.score_engine import calculate_safety_score
-from sqlalchemy.orm import Session
-from fastapi import Depends
+
 from app.core.database import get_db
 from app.models.analysis import Analysis
-from app.models.issue import Issue
-from sqlalchemy.orm import joinedload
+from app.tasks.analyze_task import process_analysis
 
 router = APIRouter(prefix="/analyze", tags=["Analysis"])
 
@@ -19,10 +14,9 @@ UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
-
 @router.post("/")
 async def upload_and_analyze(
-    file: UploadFile = File(...),    
+    file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
 
@@ -35,53 +29,26 @@ async def upload_and_analyze(
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # Run static analysis
-    analysis_output = run_cppcheck(file_path)
-
-    # Parse raw output
-    parsed_issues = parse_cppcheck_output(analysis_output)
-
-    # Apply safety classification
-    classified_issues = [
-        classify_issue(issue) for issue in parsed_issues
-    ]
-
-    score_data = calculate_safety_score(classified_issues)
-
-    # Save analysis
+    # Create analysis record with processing status
     analysis_record = Analysis(
         filename=file.filename,
         stored_as=unique_name,
-        score=score_data["score"]
+        score=0,
+        status="processing"
     )
+
     db.add(analysis_record)
     db.commit()
     db.refresh(analysis_record)
 
-    for issue in classified_issues:
-        issue_record = Issue(
-            analysis_id=analysis_record.id,
-            file=issue["file"],
-            line=issue["line"],
-            column=issue["column"],
-            severity=issue["severity"],
-            message=issue["message"],
-            rule=issue["rule"],
-            category=issue["category"],
-            criticality=issue["criticality"]
-        )
-        db.add(issue_record)
-
-    db.commit()
+    # Queue background job
+    process_analysis.delay(analysis_record.id, file_path)
 
     return {
         "analysis_id": analysis_record.id,
-        "filename": file.filename,
-        "issue_count": len(classified_issues),
-        "score": score_data["score"],
-        "breakdown": score_data["breakdown"],
-        "issues": classified_issues
+        "status": "processing"
     }
+
 
 @router.get("/{analysis_id}")
 def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
@@ -100,6 +67,7 @@ def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
         "analysis_id": analysis.id,
         "filename": analysis.filename,
         "score": analysis.score,
+        "status": analysis.status,
         "created_at": analysis.created_at,
         "issues": [
             {

@@ -13,3 +13,5 @@ class Analysis(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     issues = relationship("Issue", backref="analysis", cascade="all, delete")
+
+    status = Column(String, default="processing")  # processing, completed, failed
