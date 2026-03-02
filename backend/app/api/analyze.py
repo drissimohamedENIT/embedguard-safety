@@ -11,6 +11,7 @@ from fastapi import Depends
 from app.core.database import get_db
 from app.models.analysis import Analysis
 from app.models.issue import Issue
+from sqlalchemy.orm import joinedload
 
 router = APIRouter(prefix="/analyze", tags=["Analysis"])
 
@@ -80,4 +81,37 @@ async def upload_and_analyze(
         "score": score_data["score"],
         "breakdown": score_data["breakdown"],
         "issues": classified_issues
+    }
+
+@router.get("/{analysis_id}")
+def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
+
+    analysis = (
+        db.query(Analysis)
+        .options(joinedload(Analysis.issues))
+        .filter(Analysis.id == analysis_id)
+        .first()
+    )
+
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    return {
+        "analysis_id": analysis.id,
+        "filename": analysis.filename,
+        "score": analysis.score,
+        "created_at": analysis.created_at,
+        "issues": [
+            {
+                "file": issue.file,
+                "line": issue.line,
+                "column": issue.column,
+                "severity": issue.severity,
+                "message": issue.message,
+                "rule": issue.rule,
+                "category": issue.category,
+                "criticality": issue.criticality
+            }
+            for issue in analysis.issues
+        ]
     }

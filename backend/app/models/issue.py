@@ -5,7 +5,7 @@ class Issue(Base):
     __tablename__ = "issues"
 
     id = Column(Integer, primary_key=True, index=True)
-    analysis_id = Column(Integer, ForeignKey("analyses.id"))
+    analysis_id = Column(Integer, ForeignKey("analyses.id", ondelete="CASCADE"))
     file = Column(String)
     line = Column(Integer)
     column = Column(Integer)
