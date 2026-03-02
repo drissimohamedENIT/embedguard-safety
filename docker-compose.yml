@@ -1,0 +1,54 @@
+version: "3.9"
+
+services:
+
+  postgres:
+    image: postgres:16
+    container_name: embedguard_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: embedguard
+      POSTGRES_USER: embeduser
+      POSTGRES_PASSWORD: embedpass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    container_name: embedguard_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  api:
+    build: ./backend
+    container_name: embedguard_api
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      DATABASE_URL: postgresql://embeduser:embedpass@postgres:5432/embedguard
+      REDIS_URL: redis://redis:6379/0
+
+  worker:
+    build: ./backend
+    container_name: embedguard_worker
+    command: celery -A app.core.celery_app worker --loglevel=info
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      DATABASE_URL: postgresql://embeduser:embedpass@postgres:5432/embedguard
+      REDIS_URL: redis://redis:6379/0
+
+volumes:
+  postgres_data:
