@@ -1,11 +1,14 @@
 import re
+import os
+
+
+IGNORED_RULES = {
+    "checkersReport",
+    "missingIncludeSystem"
+}
 
 
 def parse_cppcheck_output(raw_output: str):
-    """
-    Parses cppcheck raw stderr output into structured issue list.
-    """
-
     issues = []
 
     pattern = re.compile(
@@ -15,13 +18,24 @@ def parse_cppcheck_output(raw_output: str):
     for line in raw_output.splitlines():
         match = pattern.search(line)
         if match:
+
+            rule = match.group("rule")
+
+            if rule in IGNORED_RULES:
+                continue
+
+            file_path = match.group("file")
+
+            if file_path == "nofile":
+                continue
+
             issues.append({
-                "file": match.group("file"),
+                "file": os.path.basename(file_path),
                 "line": int(match.group("line")),
                 "column": int(match.group("column")),
                 "severity": match.group("severity"),
                 "message": match.group("message"),
-                "rule": match.group("rule")
+                "rule": rule
             })
 
     return issues

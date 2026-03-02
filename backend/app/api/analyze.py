@@ -5,6 +5,7 @@ from uuid import uuid4
 from app.services.analyzer import run_cppcheck
 from app.parsers.cppcheck_parser import parse_cppcheck_output
 from app.services.classifier import classify_issue
+from app.scoring.score_engine import calculate_safety_score
 
 router = APIRouter(prefix="/analyze", tags=["Analysis"])
 
@@ -36,9 +37,14 @@ async def upload_and_analyze(file: UploadFile = File(...)):
         classify_issue(issue) for issue in parsed_issues
     ]
 
+    score_data = calculate_safety_score(classified_issues)
+
     return {
         "filename": file.filename,
         "stored_as": unique_name,
         "issue_count": len(classified_issues),
+        "score": score_data["score"],
+        "breakdown": score_data["breakdown"],
         "issues": classified_issues
+
     }
