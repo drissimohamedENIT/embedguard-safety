@@ -45,6 +45,7 @@ generate-parameter-library-py==0.6.0
 geographic-msgs==1.0.6
 geometry-msgs==5.3.6
 gps-msgs==2.1.1
+greenlet==3.3.2
 h11==0.16.0
 idna==3.11
 image-geometry==4.1.0
@@ -71,6 +72,7 @@ pal-statistics==2.7.0
 pal-statistics-msgs==2.7.0
 pcl-msgs==1.0.0
 pendulum-msgs==0.33.9
+psycopg2-binary==2.9.11
 pydantic==2.12.5
 pydantic_core==2.41.5
 python-multipart==0.0.22
@@ -151,6 +153,7 @@ shape-msgs==5.3.6
 simulation-interfaces==1.2.0
 slam-toolbox==2.8.3
 smclib==4.1.2
+SQLAlchemy==2.0.48
 sros2==0.13.5
 starlette==0.52.1
 statistics-msgs==2.0.3
