@@ -3,15 +3,21 @@ from sqlalchemy.orm import Session, joinedload
 import os
 import shutil
 from uuid import uuid4
+import hashlib
 
 from app.core.database import get_db
 from app.models.analysis import Analysis
 from app.tasks.analyze_task import process_analysis
 
+
 router = APIRouter(prefix="/analyze", tags=["Analysis"])
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+def compute_file_hash(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
 
 
 @router.post("/")
@@ -23,18 +29,42 @@ async def upload_and_analyze(
     if not file.filename.endswith((".c", ".cpp")):
         raise HTTPException(status_code=400, detail="Only .c and .cpp files allowed")
 
+    # Read file content
+    content = await file.read()
+
+    # Compute hash
+    file_hash = compute_file_hash(content)
+
+    # Check if analysis already exists
+    existing = (
+        db.query(Analysis)
+        .filter(
+            Analysis.file_hash == file_hash,
+            Analysis.status == "completed"
+        )
+        .first()
+    )
+
+    if existing:
+        return {
+            "analysis_id": existing.id,
+            "status": "cached"
+        }
+
+    # Save file
     unique_name = f"{uuid4()}_{file.filename}"
     file_path = os.path.join(UPLOAD_DIR, unique_name)
 
     with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+        buffer.write(content)
 
-    # Create analysis record with processing status
+    # Create analysis record
     analysis_record = Analysis(
         filename=file.filename,
         stored_as=unique_name,
         score=0,
-        status="processing"
+        status="processing",
+        file_hash=file_hash
     )
 
     db.add(analysis_record)
