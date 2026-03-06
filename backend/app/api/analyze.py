@@ -4,6 +4,7 @@ import os
 import shutil
 from uuid import uuid4
 import hashlib
+import zipfile
 
 from app.core.database import get_db
 from app.models.analysis import Analysis
@@ -20,6 +21,9 @@ def compute_file_hash(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+# -------------------------------
+# Scan single C/C++ file
+# -------------------------------
 @router.post("/")
 async def upload_and_analyze(
     file: UploadFile = File(...),
@@ -29,13 +33,10 @@ async def upload_and_analyze(
     if not file.filename.endswith((".c", ".cpp")):
         raise HTTPException(status_code=400, detail="Only .c and .cpp files allowed")
 
-    # Read file content
     content = await file.read()
 
-    # Compute hash
     file_hash = compute_file_hash(content)
 
-    # Check if analysis already exists
     existing = (
         db.query(Analysis)
         .filter(
@@ -51,14 +52,12 @@ async def upload_and_analyze(
             "status": "cached"
         }
 
-    # Save file
     unique_name = f"{uuid4()}_{file.filename}"
     file_path = os.path.join(UPLOAD_DIR, unique_name)
 
     with open(file_path, "wb") as buffer:
         buffer.write(content)
 
-    # Create analysis record
     analysis_record = Analysis(
         filename=file.filename,
         stored_as=unique_name,
@@ -71,7 +70,6 @@ async def upload_and_analyze(
     db.commit()
     db.refresh(analysis_record)
 
-    # Queue background job
     process_analysis.delay(analysis_record.id, file_path)
 
     return {
@@ -80,6 +78,54 @@ async def upload_and_analyze(
     }
 
 
+# -------------------------------
+# Scan entire project (ZIP)
+# -------------------------------
+@router.post("/project")
+async def analyze_project(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+
+    if not file.filename.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only ZIP files allowed")
+
+    content = await file.read()
+
+    unique_name = f"{uuid4()}_{file.filename}"
+    zip_path = os.path.join(UPLOAD_DIR, unique_name)
+
+    with open(zip_path, "wb") as buffer:
+        buffer.write(content)
+
+    extract_dir = os.path.join(UPLOAD_DIR, str(uuid4()))
+    os.makedirs(extract_dir, exist_ok=True)
+
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        zip_ref.extractall(extract_dir)
+
+    analysis_record = Analysis(
+        filename=file.filename,
+        stored_as=extract_dir,
+        score=0,
+        status="processing"
+    )
+
+    db.add(analysis_record)
+    db.commit()
+    db.refresh(analysis_record)
+
+    process_analysis.delay(analysis_record.id, extract_dir)
+
+    return {
+        "analysis_id": analysis_record.id,
+        "status": "processing"
+    }
+
+
+# -------------------------------
+# Get analysis result
+# -------------------------------
 @router.get("/{analysis_id}")
 def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
 
