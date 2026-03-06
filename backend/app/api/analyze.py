@@ -10,6 +10,8 @@ from app.core.database import get_db
 from app.models.analysis import Analysis
 from app.tasks.analyze_task import process_analysis
 
+import subprocess
+from app.schemas.repository import RepositoryScan
 
 router = APIRouter(prefix="/analyze", tags=["Analysis"])
 
@@ -121,6 +123,46 @@ async def analyze_project(
         "analysis_id": analysis_record.id,
         "status": "processing"
     }
+
+# -------------------------------
+# Scan entire project (github repo)
+# -------------------------------
+@router.post("/repository")
+def analyze_repository(
+    repo: RepositoryScan,
+    db: Session = Depends(get_db)
+):
+
+    repo_url = repo.repo_url
+
+    repo_folder = os.path.join(UPLOAD_DIR, str(uuid4()))
+
+    # Clone repository
+    subprocess.run(
+        ["git", "clone", "--depth", "1", repo_url, repo_folder],
+        check=True
+    )
+
+    # Create analysis record
+    analysis_record = Analysis(
+        filename=repo_url,
+        stored_as=repo_folder,
+        score=0,
+        status="processing"
+    )
+
+    db.add(analysis_record)
+    db.commit()
+    db.refresh(analysis_record)
+
+    # Queue analysis task
+    process_analysis.delay(analysis_record.id, repo_folder)
+
+    return {
+        "analysis_id": analysis_record.id,
+        "status": "processing"
+    }
+
 
 
 # -------------------------------
