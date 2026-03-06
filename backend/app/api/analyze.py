@@ -1,17 +1,17 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session, joinedload
 import os
-import shutil
 from uuid import uuid4
 import hashlib
 import zipfile
+import subprocess
 
 from app.core.database import get_db
 from app.models.analysis import Analysis
+from app.models.issue import Issue
 from app.tasks.analyze_task import process_analysis
-
-import subprocess
 from app.schemas.repository import RepositoryScan
+
 
 router = APIRouter(prefix="/analyze", tags=["Analysis"])
 
@@ -23,9 +23,9 @@ def compute_file_hash(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
-# -------------------------------
+# --------------------------------
 # Scan single C/C++ file
-# -------------------------------
+# --------------------------------
 @router.post("/")
 async def upload_and_analyze(
     file: UploadFile = File(...),
@@ -80,9 +80,9 @@ async def upload_and_analyze(
     }
 
 
-# -------------------------------
-# Scan entire project (ZIP)
-# -------------------------------
+# --------------------------------
+# Scan ZIP project
+# --------------------------------
 @router.post("/project")
 async def analyze_project(
     file: UploadFile = File(...),
@@ -124,9 +124,10 @@ async def analyze_project(
         "status": "processing"
     }
 
-# -------------------------------
-# Scan entire project (github repo)
-# -------------------------------
+
+# --------------------------------
+# Scan GitHub repository
+# --------------------------------
 @router.post("/repository")
 def analyze_repository(
     repo: RepositoryScan,
@@ -137,13 +138,11 @@ def analyze_repository(
 
     repo_folder = os.path.join(UPLOAD_DIR, str(uuid4()))
 
-    # Clone repository
     subprocess.run(
         ["git", "clone", "--depth", "1", repo_url, repo_folder],
         check=True
     )
 
-    # Create analysis record
     analysis_record = Analysis(
         filename=repo_url,
         stored_as=repo_folder,
@@ -155,7 +154,6 @@ def analyze_repository(
     db.commit()
     db.refresh(analysis_record)
 
-    # Queue analysis task
     process_analysis.delay(analysis_record.id, repo_folder)
 
     return {
@@ -164,12 +162,14 @@ def analyze_repository(
     }
 
 
-
-# -------------------------------
+# --------------------------------
 # Get analysis result
-# -------------------------------
+# --------------------------------
 @router.get("/{analysis_id}")
-def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
+def get_analysis(
+    analysis_id: int,
+    db: Session = Depends(get_db)
+):
 
     analysis = (
         db.query(Analysis)
@@ -187,6 +187,7 @@ def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
         "score": analysis.score,
         "status": analysis.status,
         "created_at": analysis.created_at,
+        "issue_count": len(analysis.issues),
         "issues": [
             {
                 "file": issue.file,
@@ -200,4 +201,56 @@ def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
             }
             for issue in analysis.issues
         ]
+    }
+
+
+# --------------------------------
+# Platform statistics
+# --------------------------------
+@router.get("/stats/summary")
+def get_platform_stats(
+    db: Session = Depends(get_db)
+):
+
+    total_scans = db.query(Analysis).count()
+
+    completed_scans = (
+        db.query(Analysis)
+        .filter(Analysis.status == "completed")
+        .count()
+    )
+
+    failed_scans = (
+        db.query(Analysis)
+        .filter(Analysis.status == "failed")
+        .count()
+    )
+
+    processing_scans = (
+        db.query(Analysis)
+        .filter(Analysis.status == "processing")
+        .count()
+    )
+
+    scores = (
+        db.query(Analysis.score)
+        .filter(Analysis.status == "completed")
+        .all()
+    )
+
+    avg_score = 0
+
+    if scores:
+        score_values = [s[0] for s in scores]
+        avg_score = sum(score_values) / len(score_values)
+
+    total_issues = db.query(Issue).count()
+
+    return {
+        "total_scans": total_scans,
+        "completed_scans": completed_scans,
+        "failed_scans": failed_scans,
+        "processing_scans": processing_scans,
+        "average_score": round(avg_score, 2),
+        "total_issues": total_issues
     }
