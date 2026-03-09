@@ -36,7 +36,6 @@ async def upload_and_analyze(
         raise HTTPException(status_code=400, detail="Only .c and .cpp files allowed")
 
     content = await file.read()
-
     file_hash = compute_file_hash(content)
 
     existing = (
@@ -135,7 +134,6 @@ def analyze_repository(
 ):
 
     repo_url = repo.repo_url
-
     repo_folder = os.path.join(UPLOAD_DIR, str(uuid4()))
 
     subprocess.run(
@@ -163,6 +161,71 @@ def analyze_repository(
 
 
 # --------------------------------
+# Scan history (STATIC ROUTE FIRST)
+# --------------------------------
+@router.get("/history")
+def get_analysis_history(
+    limit: int = 20,
+    db: Session = Depends(get_db)
+):
+
+    analyses = (
+        db.query(Analysis)
+        .order_by(Analysis.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        {
+            "analysis_id": analysis.id,
+            "filename": analysis.filename,
+            "score": analysis.score,
+            "status": analysis.status,
+            "created_at": analysis.created_at
+        }
+        for analysis in analyses
+    ]
+
+
+# --------------------------------
+# Platform statistics
+# --------------------------------
+@router.get("/stats/summary")
+def get_platform_stats(
+    db: Session = Depends(get_db)
+):
+
+    total_scans = db.query(Analysis).count()
+
+    completed_scans = db.query(Analysis).filter(Analysis.status == "completed").count()
+    failed_scans = db.query(Analysis).filter(Analysis.status == "failed").count()
+    processing_scans = db.query(Analysis).filter(Analysis.status == "processing").count()
+
+    scores = (
+        db.query(Analysis.score)
+        .filter(Analysis.status == "completed")
+        .all()
+    )
+
+    avg_score = 0
+    if scores:
+        score_values = [s[0] for s in scores]
+        avg_score = sum(score_values) / len(score_values)
+
+    total_issues = db.query(Issue).count()
+
+    return {
+        "total_scans": total_scans,
+        "completed_scans": completed_scans,
+        "failed_scans": failed_scans,
+        "processing_scans": processing_scans,
+        "average_score": round(avg_score, 2),
+        "total_issues": total_issues
+    }
+
+
+# --------------------------------
 # Get analysis metadata
 # --------------------------------
 @router.get("/{analysis_id}")
@@ -171,20 +234,12 @@ def get_analysis(
     db: Session = Depends(get_db)
 ):
 
-    analysis = (
-        db.query(Analysis)
-        .filter(Analysis.id == analysis_id)
-        .first()
-    )
+    analysis = db.query(Analysis).filter(Analysis.id == analysis_id).first()
 
     if not analysis:
         raise HTTPException(status_code=404, detail="Analysis not found")
 
-    issue_count = (
-        db.query(Issue)
-        .filter(Issue.analysis_id == analysis_id)
-        .count()
-    )
+    issue_count = db.query(Issue).filter(Issue.analysis_id == analysis_id).count()
 
     return {
         "analysis_id": analysis.id,
@@ -196,28 +251,21 @@ def get_analysis(
     }
 
 
+# --------------------------------
+# Analysis summary
+# --------------------------------
 @router.get("/{analysis_id}/summary")
 def get_analysis_summary(
     analysis_id: int,
     db: Session = Depends(get_db)
 ):
 
-    analysis = (
-        db.query(Analysis)
-        .filter(Analysis.id == analysis_id)
-        .first()
-    )
+    analysis = db.query(Analysis).filter(Analysis.id == analysis_id).first()
 
     if not analysis:
         raise HTTPException(status_code=404, detail="Analysis not found")
 
-    issues = (
-        db.query(Issue)
-        .filter(Issue.analysis_id == analysis_id)
-        .all()
-    )
-
-    total_issues = len(issues)
+    issues = db.query(Issue).filter(Issue.analysis_id == analysis_id).all()
 
     severity_distribution = {}
     criticality_distribution = {}
@@ -225,63 +273,42 @@ def get_analysis_summary(
 
     for issue in issues:
 
-        severity_distribution[issue.severity] = (
-            severity_distribution.get(issue.severity, 0) + 1
-        )
-
-        criticality_distribution[issue.criticality] = (
-            criticality_distribution.get(issue.criticality, 0) + 1
-        )
-
-        category_distribution[issue.category] = (
-            category_distribution.get(issue.category, 0) + 1
-        )
+        severity_distribution[issue.severity] = severity_distribution.get(issue.severity, 0) + 1
+        criticality_distribution[issue.criticality] = criticality_distribution.get(issue.criticality, 0) + 1
+        category_distribution[issue.category] = category_distribution.get(issue.category, 0) + 1
 
     return {
         "analysis_id": analysis.id,
         "score": analysis.score,
-        "total_issues": total_issues,
+        "total_issues": len(issues),
         "severity_distribution": severity_distribution,
         "criticality_distribution": criticality_distribution,
         "category_distribution": category_distribution
     }
 
 
+# --------------------------------
+# Files with issue counts
+# --------------------------------
 @router.get("/{analysis_id}/files")
 def get_analysis_files(
     analysis_id: int,
     db: Session = Depends(get_db)
 ):
 
-    analysis = (
-        db.query(Analysis)
-        .filter(Analysis.id == analysis_id)
-        .first()
-    )
+    analysis = db.query(Analysis).filter(Analysis.id == analysis_id).first()
 
     if not analysis:
         raise HTTPException(status_code=404, detail="Analysis not found")
 
-    issues = (
-        db.query(Issue)
-        .filter(Issue.analysis_id == analysis_id)
-        .all()
-    )
+    issues = db.query(Issue).filter(Issue.analysis_id == analysis_id).all()
 
     file_counts = {}
 
     for issue in issues:
         file_counts[issue.file] = file_counts.get(issue.file, 0) + 1
 
-    files = [
-        {
-            "file": file,
-            "issues": count
-        }
-        for file, count in file_counts.items()
-    ]
-
-    # sort by most issues
+    files = [{"file": f, "issues": c} for f, c in file_counts.items()]
     files.sort(key=lambda x: x["issues"], reverse=True)
 
     return {
@@ -310,10 +337,8 @@ def get_analysis_issues(
         raise HTTPException(status_code=400, detail="page must be >= 1")
 
     offset = (page - 1) * page_size
-
     query = db.query(Issue).filter(Issue.analysis_id == analysis_id)
 
-    # Apply filters
     if severity:
         query = query.filter(Issue.severity == severity)
 
@@ -331,25 +356,13 @@ def get_analysis_issues(
 
     total_issues = query.count()
 
-    issues = (
-        query
-        .offset(offset)
-        .limit(page_size)
-        .all()
-    )
+    issues = query.offset(offset).limit(page_size).all()
 
     return {
         "analysis_id": analysis_id,
         "page": page,
         "page_size": page_size,
         "total_issues": total_issues,
-        "filters": {
-            "severity": severity,
-            "criticality": criticality,
-            "category": category,
-            "file": file,
-            "rule": rule
-        },
         "issues": [
             {
                 "id": issue.id,
@@ -364,56 +377,4 @@ def get_analysis_issues(
             }
             for issue in issues
         ]
-    }
-
-
-# --------------------------------
-# Platform statistics
-# --------------------------------
-@router.get("/stats/summary")
-def get_platform_stats(
-    db: Session = Depends(get_db)
-):
-
-    total_scans = db.query(Analysis).count()
-
-    completed_scans = (
-        db.query(Analysis)
-        .filter(Analysis.status == "completed")
-        .count()
-    )
-
-    failed_scans = (
-        db.query(Analysis)
-        .filter(Analysis.status == "failed")
-        .count()
-    )
-
-    processing_scans = (
-        db.query(Analysis)
-        .filter(Analysis.status == "processing")
-        .count()
-    )
-
-    scores = (
-        db.query(Analysis.score)
-        .filter(Analysis.status == "completed")
-        .all()
-    )
-
-    avg_score = 0
-
-    if scores:
-        score_values = [s[0] for s in scores]
-        avg_score = sum(score_values) / len(score_values)
-
-    total_issues = db.query(Issue).count()
-
-    return {
-        "total_scans": total_scans,
-        "completed_scans": completed_scans,
-        "failed_scans": failed_scans,
-        "processing_scans": processing_scans,
-        "average_score": round(avg_score, 2),
-        "total_issues": total_issues
     }
