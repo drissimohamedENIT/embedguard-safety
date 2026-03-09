@@ -1,11 +1,11 @@
 from app.core.celery_app import celery_app
 from app.core.database import SessionLocal
 from app.models.analysis import Analysis
-from app.models.issue import Issue
-from app.services.analyzer import run_cppcheck
-from app.parsers.cppcheck_parser import parse_cppcheck_output
-from app.services.classifier import classify_issue
-from app.scoring.score_engine import calculate_safety_score
+from app.utils.file_scanner import discover_source_files
+from app.tasks.file_analysis_task import analyze_single_file
+from app.tasks.aggregate_analysis_task import finalize_analysis
+
+from celery import chord
 
 import logging
 
@@ -17,13 +17,15 @@ logger = logging.getLogger(__name__)
     autoretry_for=(Exception,),
     retry_backoff=True,
     retry_kwargs={"max_retries": 3},
-    time_limit=60
+    time_limit=600,
+    soft_time_limit=540
 )
 def process_analysis(self, analysis_id: int, file_path: str):
 
     db = SessionLocal()
 
     try:
+
         logger.info(f"Starting analysis {analysis_id}")
 
         analysis = db.query(Analysis).filter(Analysis.id == analysis_id).first()
@@ -32,41 +34,31 @@ def process_analysis(self, analysis_id: int, file_path: str):
             logger.error(f"Analysis {analysis_id} not found")
             return
 
-        # Run cppcheck
-        raw_output = run_cppcheck(file_path)
+        # Discover C/C++ files
+        files = discover_source_files(file_path)
 
-        # Parse issues
-        parsed_issues = parse_cppcheck_output(raw_output)
+        if not files:
+            logger.warning("No source files found")
 
-        classified_issues = [
-            classify_issue(issue) for issue in parsed_issues
-        ]
+            analysis.status = "completed"
+            analysis.score = 100
 
-        # Score
-        score_data = calculate_safety_score(classified_issues)
+            db.commit()
+            return
 
-        # Save issues
-        for issue in classified_issues:
-            issue_record = Issue(
-                analysis_id=analysis_id,
-                file=issue["file"],
-                line=issue["line"],
-                column=issue["column"],
-                severity=issue["severity"],
-                message=issue["message"],
-                rule=issue["rule"],
-                category=issue["category"],
-                criticality=issue["criticality"]
+        logger.info(f"Discovered {len(files)} source files")
+
+        # Create chord (parallel tasks + aggregation)
+        job = chord(
+            analyze_single_file.s(f) for f in files
+        )
+
+        job(
+            finalize_analysis.s(
+                analysis_id,
+                file_path
             )
-            db.add(issue_record)
-
-        # Update analysis
-        analysis.score = score_data["score"]
-        analysis.status = "completed"
-
-        db.commit()
-
-        logger.info(f"Analysis {analysis_id} completed")
+        )
 
     except Exception as e:
 

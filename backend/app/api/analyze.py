@@ -1,5 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 import os
 from uuid import uuid4
 import hashlib
@@ -163,7 +163,7 @@ def analyze_repository(
 
 
 # --------------------------------
-# Get analysis result
+# Get analysis metadata
 # --------------------------------
 @router.get("/{analysis_id}")
 def get_analysis(
@@ -173,7 +173,6 @@ def get_analysis(
 
     analysis = (
         db.query(Analysis)
-        .options(joinedload(Analysis.issues))
         .filter(Analysis.id == analysis_id)
         .first()
     )
@@ -181,13 +180,54 @@ def get_analysis(
     if not analysis:
         raise HTTPException(status_code=404, detail="Analysis not found")
 
+    issue_count = (
+        db.query(Issue)
+        .filter(Issue.analysis_id == analysis_id)
+        .count()
+    )
+
     return {
         "analysis_id": analysis.id,
         "filename": analysis.filename,
         "score": analysis.score,
         "status": analysis.status,
         "created_at": analysis.created_at,
-        "issue_count": len(analysis.issues),
+        "total_issues": issue_count
+    }
+
+
+# --------------------------------
+# Paginated issues endpoint
+# --------------------------------
+@router.get("/{analysis_id}/issues")
+def get_analysis_issues(
+    analysis_id: int,
+    page: int = 1,
+    page_size: int = 100,
+    db: Session = Depends(get_db)
+):
+
+    if page < 1:
+        raise HTTPException(status_code=400, detail="page must be >= 1")
+
+    offset = (page - 1) * page_size
+
+    query = db.query(Issue).filter(Issue.analysis_id == analysis_id)
+
+    total_issues = query.count()
+
+    issues = (
+        query
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+
+    return {
+        "analysis_id": analysis_id,
+        "page": page,
+        "page_size": page_size,
+        "total_issues": total_issues,
         "issues": [
             {
                 "file": issue.file,
@@ -199,7 +239,7 @@ def get_analysis(
                 "category": issue.category,
                 "criticality": issue.criticality
             }
-            for issue in analysis.issues
+            for issue in issues
         ]
     }
 
