@@ -247,6 +247,48 @@ def get_analysis_summary(
     }
 
 
+@router.get("/{analysis_id}/files")
+def get_analysis_files(
+    analysis_id: int,
+    db: Session = Depends(get_db)
+):
+
+    analysis = (
+        db.query(Analysis)
+        .filter(Analysis.id == analysis_id)
+        .first()
+    )
+
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    issues = (
+        db.query(Issue)
+        .filter(Issue.analysis_id == analysis_id)
+        .all()
+    )
+
+    file_counts = {}
+
+    for issue in issues:
+        file_counts[issue.file] = file_counts.get(issue.file, 0) + 1
+
+    files = [
+        {
+            "file": file,
+            "issues": count
+        }
+        for file, count in file_counts.items()
+    ]
+
+    # sort by most issues
+    files.sort(key=lambda x: x["issues"], reverse=True)
+
+    return {
+        "analysis_id": analysis_id,
+        "files": files
+    }
+
 
 # --------------------------------
 # Paginated issues endpoint
