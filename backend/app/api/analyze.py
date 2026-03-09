@@ -196,6 +196,58 @@ def get_analysis(
     }
 
 
+@router.get("/{analysis_id}/summary")
+def get_analysis_summary(
+    analysis_id: int,
+    db: Session = Depends(get_db)
+):
+
+    analysis = (
+        db.query(Analysis)
+        .filter(Analysis.id == analysis_id)
+        .first()
+    )
+
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    issues = (
+        db.query(Issue)
+        .filter(Issue.analysis_id == analysis_id)
+        .all()
+    )
+
+    total_issues = len(issues)
+
+    severity_distribution = {}
+    criticality_distribution = {}
+    category_distribution = {}
+
+    for issue in issues:
+
+        severity_distribution[issue.severity] = (
+            severity_distribution.get(issue.severity, 0) + 1
+        )
+
+        criticality_distribution[issue.criticality] = (
+            criticality_distribution.get(issue.criticality, 0) + 1
+        )
+
+        category_distribution[issue.category] = (
+            category_distribution.get(issue.category, 0) + 1
+        )
+
+    return {
+        "analysis_id": analysis.id,
+        "score": analysis.score,
+        "total_issues": total_issues,
+        "severity_distribution": severity_distribution,
+        "criticality_distribution": criticality_distribution,
+        "category_distribution": category_distribution
+    }
+
+
+
 # --------------------------------
 # Paginated issues endpoint
 # --------------------------------
