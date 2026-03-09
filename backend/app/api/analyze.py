@@ -298,6 +298,11 @@ def get_analysis_issues(
     analysis_id: int,
     page: int = 1,
     page_size: int = 100,
+    severity: str | None = None,
+    criticality: str | None = None,
+    category: str | None = None,
+    file: str | None = None,
+    rule: str | None = None,
     db: Session = Depends(get_db)
 ):
 
@@ -307,6 +312,22 @@ def get_analysis_issues(
     offset = (page - 1) * page_size
 
     query = db.query(Issue).filter(Issue.analysis_id == analysis_id)
+
+    # Apply filters
+    if severity:
+        query = query.filter(Issue.severity == severity)
+
+    if criticality:
+        query = query.filter(Issue.criticality == criticality)
+
+    if category:
+        query = query.filter(Issue.category == category)
+
+    if file:
+        query = query.filter(Issue.file == file)
+
+    if rule:
+        query = query.filter(Issue.rule == rule)
 
     total_issues = query.count()
 
@@ -322,8 +343,16 @@ def get_analysis_issues(
         "page": page,
         "page_size": page_size,
         "total_issues": total_issues,
+        "filters": {
+            "severity": severity,
+            "criticality": criticality,
+            "category": category,
+            "file": file,
+            "rule": rule
+        },
         "issues": [
             {
+                "id": issue.id,
                 "file": issue.file,
                 "line": issue.line,
                 "column": issue.column,
