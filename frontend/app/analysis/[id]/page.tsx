@@ -7,6 +7,8 @@ import MainLayout from "@/components/layout/main-layout"
 import ScorePanel from "@/components/analysis/score-panel"
 import FileTree from "@/components/analysis/file-tree"
 
+import IssuesTable from "@/components/analysis/issues-table"
+
 import { useAnalysisSummary } from "@/hooks/useAnalysisSummary"
 
 export default function AnalysisPage() {
@@ -55,9 +57,7 @@ export default function AnalysisPage() {
                   Issues
                 </h2>
 
-                <p className="text-slate-400">
-                  Issues table will appear here in the next step.
-                </p>
+                <IssuesTable analysisId={analysisId} />
 
               </div>
 
